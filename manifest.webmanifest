@@ -1,0 +1,8 @@
+{
+  "name": "NEON DUAL BEAT",
+  "short_name": "NEON DUAL BEAT",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#07070f",
+  "theme_color": "#07070f"
+}

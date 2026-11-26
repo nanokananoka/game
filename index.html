@@ -2,16 +2,94 @@
 <html lang="ja"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover,maximum-scale=1,user-scalable=no">
 <title>NEON DUAL BEAT</title>
-<style>html,body{margin:0;height:100%;background:#07070f;overflow:hidden}canvas{display:block;cursor:crosshair;touch-action:none}</style>
-</head><body><canvas id="c"></canvas>
+<link rel="manifest" href="./manifest.webmanifest">
+<style>
+html,body{margin:0;height:100%;background:#07070f;overflow:hidden}
+#game{position:fixed;top:0;right:0;bottom:0;left:0;inset:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
+canvas{display:block;width:100%;height:100%;cursor:crosshair;touch-action:none}
+#fullscreen{
+  position:absolute;top:12px;right:12px;min-height:44px;padding:0 12px;
+  border:1px solid #00f0ff;border-radius:6px;background:#0e1725;color:#00f0ff;
+  font:700 14px system-ui,sans-serif;cursor:pointer;touch-action:manipulation
+}
+#fullscreen:focus-visible{outline:2px solid #fff;outline-offset:3px}
+.status{
+  position:absolute;right:12px;max-width:calc(100% - 24px);box-sizing:border-box;
+  padding:8px 12px;border-radius:6px;background:#171c30;color:#e2e8f7;
+  font:14px system-ui,sans-serif;pointer-events:none
+}
+#fullscreen-status{top:64px}
+#game-status{bottom:12px;left:12px;text-align:center}
+</style>
+</head><body>
+<div id="game">
+  <canvas id="c"></canvas>
+  <button id="fullscreen" type="button" hidden>全画面</button>
+  <div id="fullscreen-status" class="status" role="status" hidden></div>
+  <div id="game-status" class="status" role="status">ゲームが表示されない場合は、JavaScriptが有効なSafariなどのブラウザーでゲームのURLを開いてください。</div>
+</div>
 <script>
 const cv=document.getElementById('c'),g=cv.getContext('2d');
+const fullscreenButton=document.getElementById('fullscreen');
+const fullscreenStatus=document.getElementById('fullscreen-status');
+const gameStatus=document.getElementById('game-status');
+const isIOS=/iPhone|iPad|iPod/.test(navigator.userAgent)||
+  (navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
+const isIOSWebApp=isIOS&&(navigator.standalone===true||matchMedia('(display-mode: standalone)').matches);
 let W,H;
-function rs(){const d=devicePixelRatio||1;W=innerWidth;H=innerHeight;cv.width=W*d;cv.height=H*d;g.setTransform(d,0,0,d,0,0)}
-addEventListener('resize',rs);rs();
+function rs(){
+  const width=cv.clientWidth,height=cv.clientHeight;
+  if(!width||!height)return;
+  const d=devicePixelRatio||1;
+  const pixelWidth=Math.round(width*d),pixelHeight=Math.round(height*d);
+  if(width===W&&height===H&&pixelWidth===cv.width&&pixelHeight===cv.height)return;
+  W=width;H=height;
+  cv.width=pixelWidth;cv.height=pixelHeight;
+  g.setTransform(pixelWidth/W,0,0,pixelHeight/H,0,0);
+  LF=W<700?.5:.3;
+  R=Math.max(1,Math.min(60,(1-LF)/4*W-8,H*.13));
+  if(targets)targets.forEach(o=>positionTarget(o,targetBounds(o.i%2)));
+}
+function updateFullscreenButton(){
+  const active=document.fullscreenElement||document.webkitFullscreenElement;
+  fullscreenButton.textContent=active?'全画面を終了':'全画面';
+  fullscreenStatus.hidden=true;
+  rs();
+}
+function showFullscreenStatus(message){
+  fullscreenStatus.hidden=false;
+  fullscreenStatus.textContent=message;
+}
+function showFullscreenUnavailable(message){
+  showFullscreenStatus(isIOS?
+    'Safariの「共有」→「ホーム画面に追加」を選びます。「Webアプリとして開く」が表示されたらオンにして、追加したアイコンから起動してください。':
+    message);
+}
+fullscreenButton.addEventListener('click',async()=>{
+  const root=document.documentElement;
+  const active=document.fullscreenElement||document.webkitFullscreenElement;
+  const element=active?document:root;
+  const request=(document.fullscreenEnabled&&root.requestFullscreen)||
+    (document.webkitFullscreenEnabled&&root.webkitRequestFullscreen);
+  const toggle=active?(document.exitFullscreen||document.webkitExitFullscreen):
+    request;
+  fullscreenStatus.hidden=true;
+  if(!toggle){
+    showFullscreenUnavailable('このブラウザーでは全画面表示を利用できません。');
+    return;
+  }
+  try{
+    await toggle.call(element);
+  }catch{
+    if(active)showFullscreenStatus('全画面表示を終了できませんでした。');
+    else showFullscreenUnavailable('全画面表示を開始できませんでした。');
+  }
+});
+document.addEventListener('fullscreenchange',updateFullscreenButton);
+document.addEventListener('webkitfullscreenchange',updateFullscreenButton);
 const BPM=110,B=60/BPM,S8=B/2,BARS=17,KEYS=['a','s','d','f'];
 const END=(BARS-1)*8*S8+1.5;
-let ac,T0,scene='start',notes,targets,fx,jt,lit,trail,score,combo,maxc,cnt,mouse={x:0,y:0},btn=null;
+let ac,T0,scene='start',starting=false,notes,targets,fx,jt,lit,trail,score,combo,maxc,cnt,mouse={x:0,y:0},btn=null;
 const now=()=>ac?ac.currentTime-T0:0;
 const mf=m=>440*Math.pow(2,(m-69)/12);
 
@@ -20,8 +98,6 @@ function noise(t,dur,type,f,v,dst){const s=ac.createBufferSource();s.buffer=nb;c
 function tone(t,f,dur,type,v,dst,f2){const o=ac.createOscillator(),gn=ac.createGain();o.type=type;o.frequency.setValueAtTime(f,t);if(f2)o.frequency.exponentialRampToValueAtTime(f2,t+dur);gn.gain.setValueAtTime(v,t);gn.gain.exponentialRampToValueAtTime(.001,t+dur);o.connect(gn).connect(dst);o.start(t);o.stop(t+dur+.02)}
 let nb,master,seBus;
 function initAudio(){
-  if(ac)ac.close();
-  ac=new (window.AudioContext||window.webkitAudioContext)();
   master=ac.createGain();master.gain.value=.6;master.connect(ac.destination);
   seBus=ac.createGain();seBus.gain.value=.5;seBus.connect(ac.destination);
   nb=ac.createBuffer(1,ac.sampleRate,ac.sampleRate);const d=nb.getChannelData(0);for(let i=0;i<d.length;i++)d[i]=Math.random()*2-1;
@@ -46,12 +122,34 @@ function seMiss(){tone(ac.currentTime,110,.15,'sawtooth',.2,seBus,60)}
 
 /* ---------- chart ---------- */
 function rng(a){return()=>{a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+function targetBounds(side){
+  const sideWidth=(1-LF)/2*W;
+  const inset=Math.min(.02*W+R,sideWidth/2);
+  return {
+    left:(side?W-sideWidth:0)+inset,
+    top:.12*H+R,
+    width:sideWidth-2*inset,
+    height:.76*H-2*R
+  };
+}
+function positionTarget(target,bounds){
+  target.x=bounds.left+target.u*bounds.width;
+  target.y=bounds.top+target.v*bounds.height;
+}
 function build(){
-  const r=rng(7);notes=[];targets=[];let lane=0,side=0,px=null,py=null;
+  const r=rng(7);notes=[];targets=[];let lane=0;
+  const bounds=[targetBounds(0),targetBounds(1)];
   const mk=t=>{
-    const sw=(1-LF)/2*W,x0=side?W-sw+.02*W+R:.02*W+R,x1=side?W-.02*W-R:sw-.02*W-R;
-    let x,y,k=0;do{x=x0+r()*(x1-x0);y=.12*H+R+r()*(.76*H-2*R)}while(px!=null&&Math.hypot(x-px,y-py)<120&&k++<20);
-    const o={t,x,y,done:0,i:targets.length,px,py};targets.push(o);px=x;py=y;side^=1;return o};
+    const i=targets.length,previous=targets[i-1];
+    const o={t,done:0,i};
+    let attempts=0;
+    do{
+      o.u=r();o.v=r();
+      positionTarget(o,bounds[i%2]);
+    }while(previous&&Math.hypot(o.x-previous.x,o.y-previous.y)<120&&attempts++<20);
+    targets.push(o);
+    return o;
+  };
   const nk=t=>{lane=(lane+1+Math.floor(r()*3))%4;const n={t,lane,done:0};notes.push(n);return n};
   const KM=new Set([30,62,94,126,128]);
   for(let s=8;s<=BARS*8-8;s++){
@@ -65,7 +163,40 @@ function build(){
 }
 
 /* ---------- game ---------- */
-function start(){applyCfg();initAudio();build();fx=[];jt=[];trail=[];lit=[0,0,0,0];score=combo=maxc=0;cnt={p:0,g:0,m:0};paused=false;resumeAt=0;scene='play'}
+async function start(){
+  if(starting)return;
+  starting=true;
+  gameStatus.textContent='音声を準備中…';
+  gameStatus.hidden=false;
+  const previous={ac,T0,master,seBus,nb,notes,targets};
+  let nextAudio,timer;
+  try{
+    nextAudio=new (window.AudioContext||window.webkitAudioContext)();
+    await new Promise((resolve,reject)=>{
+      timer=setTimeout(()=>reject(new Error('AudioContext did not start')),2000);
+      nextAudio.resume().then(resolve,reject);
+    });
+    if(nextAudio.state!=='running')throw new Error('AudioContext is not running');
+    ac=nextAudio;
+    applyCfg();
+    initAudio();
+    build();
+  }catch(error){
+    ({ac,T0,master,seBus,nb,notes,targets}=previous);
+    if(nextAudio)nextAudio.close().catch(console.error);
+    console.error('Unable to start the game',error);
+    gameStatus.textContent='ゲームの音声を開始できませんでした。もう一度ボタンを押してください。';
+    gameStatus.hidden=false;
+    return;
+  }finally{
+    clearTimeout(timer);
+    starting=false;
+  }
+  if(previous.ac)previous.ac.close().catch(console.error);
+  fx=[];jt=[];trail=[];lit=[0,0,0,0];score=combo=maxc=0;cnt={p:0,g:0,m:0};
+  paused=false;resumeAt=0;scene='play';
+  fullscreenButton.hidden=true;fullscreenStatus.hidden=true;gameStatus.hidden=true;
+}
 function spawn(x,y,col,n){for(let i=0;i<n;i++){const a=Math.random()*6.283,v=60+Math.random()*220;fx.push({x,y,vx:Math.cos(a)*v,vy:Math.sin(a)*v,t0:performance.now(),l:500+Math.random()*300,col})}}
 function judge(dt,x,y,col){
   const a=Math.abs(dt);let txt;
@@ -75,24 +206,44 @@ function judge(dt,x,y,col){
 }
 function missed(x,y){cnt.m++;combo=0;seMiss();jt.push({txt:'MISS',x,y,t0:performance.now(),col:'#ff4d6d'})}
 let FALL=1.1,APP=.9,R=60,PW=.05,GW=.1,LF=.3,ns=5,ts=5,jd=1,ofs=0,tbtn=null,tb=null,shakeT=-1e9,flashT=-1e9,paused=false,resumeAt=0,pb=null,rb=null,qb=null;
-function applyCfg(){FALL=1.8-ns*.14;APP=1.4-ts*.1;[PW,GW]=[[.07,.13],[.05,.1],[.035,.07]][jd];LF=W<700?.5:.3;R=Math.min(60,(1-LF)/4*W-8,H*.13);try{localStorage.setItem('ndb',JSON.stringify([ns,ts,jd,ofs]))}catch(e){}}
+function applyCfg(){FALL=1.8-ns*.14;APP=1.4-ts*.1;[PW,GW]=[[.07,.13],[.05,.1],[.035,.07]][jd];try{localStorage.setItem('ndb',JSON.stringify([ns,ts,jd,ofs]))}catch(e){}}
 try{const s=JSON.parse(localStorage.getItem('ndb'));if(s){ns=s[0];ts=s[1];jd=s[2];ofs=s[3]|0}}catch(e){}
 const TOUCH=matchMedia('(pointer:coarse)').matches;
-function toTitle(){if(ac){ac.close();ac=null}paused=false;resumeAt=0;scene='start'}
-function startClick(){for(const b of tbtn||[])if(mouse.x>b.x&&mouse.x<b.x+b.w&&mouse.y>b.y&&mouse.y<b.y+b.h){b.f();break}}
+function toTitle(){if(ac){ac.close();ac=null}paused=false;resumeAt=0;scene='start';gameStatus.hidden=true;fullscreenButton.hidden=isIOSWebApp}
+function hit(b){return b&&mouse.x>=b.x&&mouse.x<b.x+b.w&&mouse.y>=b.y&&mouse.y<b.y+b.h}
 function tap(){const lx=(1-LF)/2*W,lw=LF*W;if(mouse.x>=lx&&mouse.x<lx+lw)keyHit(Math.min(3,Math.floor((mouse.x-lx)/(lw/4))));else clickHit()}
-addEventListener('pointerup',()=>{if(ac&&ac.state=='suspended'&&!paused&&scene=='play')ac.resume()});
 function startScreen(){
-  const cx=W/2,st=Math.min(60,H*.11),y0=H*.3,bh=Math.min(40,st-8);tbtn=[];
-  txt('NEON DUAL BEAT',cx,H*.16,Math.min(56,W/10),'#00f0ff');
+  const cx=W/2,columns=W>=520&&H<440?2:1;
+  const titleSize=Math.min(56,columns===2?(W-224)/10:W/10,H*.13);
+  const titleY=Math.max(W<520?62+titleSize*.8:56,H*.16);
+  const top=Math.max(titleY+16,H*.3);
+  const startHeight=Math.min(54,Math.max(44,H*.1)),gap=Math.min(28,H*.045);
+  const rowsPerColumn=4/columns;
+  const rowStep=Math.min(60,(H-top-startHeight-gap-34)/rowsPerColumn);
+  const columnWidth=Math.min(360,(W-24)/columns);
+  const buttonHeight=Math.min(44,rowStep-6),buttonWidth=Math.min(44,columnWidth*.16);
+  const valueWidth=Math.min(92,columnWidth*.27);
+  const labelWidth=columnWidth-2*buttonWidth-valueWidth-18;
+  tbtn=[];
+  txt('NEON DUAL BEAT',cx,titleY,titleSize,'#00f0ff');
   const rows=[['NOTE SPEED',ns,v=>ns=Math.max(1,Math.min(10,ns+v))],['TARGET SPEED',ts,v=>ts=Math.max(1,Math.min(10,ts+v))],['JUDGE',['EASY','NORMAL','HARD'][jd],v=>jd=(jd+v+3)%3],['OFFSET',(ofs>0?'+':'')+ofs+'ms',v=>ofs=Math.max(-100,Math.min(100,ofs+v*10))]];
-  rows.forEach((r,i)=>{const y=y0+i*st;
-    txt(r[0],cx-10,y+bh*.7,Math.min(22,W/22),'#c8d0e8','right',0);
-    [[cx+4,'\u2212',-1],[cx+136,'+',1]].forEach(b=>{g.strokeStyle='#ff3df0';g.lineWidth=2;g.strokeRect(b[0],y,40,bh);txt(b[1],b[0]+20,y+bh*.72,24,'#ff3df0','center',0);tbtn.push({x:b[0],y,w:40,h:bh,f:()=>r[2](b[2])})});
-    txt(r[1],cx+90,y+bh*.7,18,'#ffb000','center',0)});
-  const by=y0+4*st+Math.min(40,H*.06),h=Math.min(54,H*.1);tbtn.push({x:cx-110,y:by,w:220,h,f:start});
-  g.strokeStyle='#ffb000';g.lineWidth=3;g.shadowColor='#ffb000';g.shadowBlur=14;g.strokeRect(cx-110,by,220,h);g.shadowBlur=0;txt('START',cx,by+h*.68,28,'#ffb000');
-  txt(TOUCH?'レーンと円ターゲットをタップ！（横向き推奨）':'A S D F キー × マウスクリック（レーンのクリックでもOK）',cx,by+h+30,14,'#8890a8','center',0);
+  rows.forEach(([label,value,change],i)=>{
+    const column=Math.floor(i/rowsPerColumn),y=top+i%rowsPerColumn*rowStep;
+    const right=cx+(column+1-columns/2)*columnWidth-8;
+    const minusX=right-2*buttonWidth-valueWidth;
+    const plusX=right-buttonWidth;
+    txt(label,minusX-10,y+buttonHeight*.7,Math.min(22,labelWidth/7.4),'#c8d0e8','right',0,labelWidth);
+    [[minusX,'−',-1],[plusX,'+',1]].forEach(([x,symbol,delta])=>{
+      g.strokeStyle='#ff3df0';g.lineWidth=2;g.strokeRect(x,y,buttonWidth,buttonHeight);
+      txt(symbol,x+buttonWidth/2,y+buttonHeight*.72,24,'#ff3df0','center',0);
+      tbtn.push({x,y,w:buttonWidth,h:buttonHeight,f:()=>change(delta)});
+    });
+    txt(value,minusX+buttonWidth+valueWidth/2,y+buttonHeight*.7,Math.min(18,valueWidth/4.7),'#ffb000','center',0,valueWidth-8);
+  });
+  const by=top+rowsPerColumn*rowStep+gap;
+  tbtn.push({x:cx-110,y:by,w:220,h:startHeight,f:start});
+  g.strokeStyle='#ffb000';g.lineWidth=3;g.shadowColor='#ffb000';g.shadowBlur=14;g.strokeRect(cx-110,by,220,startHeight);g.shadowBlur=0;txt('START',cx,by+startHeight*.68,28,'#ffb000');
+  txt(TOUCH?'レーンと円ターゲットをタップ':'A S D F キー × マウスクリック（レーンのクリックでもOK）',cx,by+startHeight+22,14,'#8890a8','center',0,W-24);
 }
 function setPause(v){if(scene!='play'||!ac)return;if(v){if(paused){resumeAt=0;return}paused=true;resumeAt=0;ac.suspend()}else if(paused&&!resumeAt)resumeAt=performance.now()+3000}
 document.addEventListener('visibilitychange',()=>{if(document.hidden)setPause(true)});
@@ -107,20 +258,46 @@ function clickHit(){
   for(const o of targets)if(!o.done&&Math.abs(o.t-t)<=GW&&Math.hypot(o.x-mouse.x,o.y-mouse.y)<=R*1.5&&(!best||Math.abs(o.t-t)<Math.abs(best.t-t)))best=o;
   if(best){best.done=1;best.ok=1;judge(t-best.t,best.x,best.y,best.k?'#ffd84d':'#ff3df0');kime(best)}
 }
-addEventListener('keydown',e=>{if(scene!='play'||e.repeat)return;if(e.key=='Escape'||e.key.toLowerCase()=='p'){setPause(!paused);return}if(paused)return;const l=KEYS.indexOf(e.key.toLowerCase());if(l>=0)keyHit(l)});
+addEventListener('keydown',e=>{if(scene!='play'||starting||e.repeat)return;if(e.key=='Escape'||e.key.toLowerCase()=='p'){setPause(!paused);return}if(paused)return;const l=KEYS.indexOf(e.key.toLowerCase());if(l>=0)keyHit(l)});
 function pos(e){const r=cv.getBoundingClientRect();mouse.x=e.clientX-r.left;mouse.y=e.clientY-r.top}
-addEventListener('pointermove',e=>{pos(e);if(scene=='play')trail.push({x:mouse.x,y:mouse.y,t:performance.now()})});
-addEventListener('pointerdown',e=>{
-  if(e.button!=0)return;pos(e);
-  if(scene=='start')startClick();
-  else if(scene=='result'&&btn&&mouse.x>btn.x&&mouse.x<btn.x+btn.w&&mouse.y>btn.y&&mouse.y<btn.y+btn.h)start();
-  else if(scene=='play'){const hit=b=>b&&mouse.x>b.x&&mouse.x<b.x+b.w&&mouse.y>b.y&&mouse.y<b.y+b.h;
-    if(paused){if(resumeAt){}else if(hit(rb))setPause(false);else if(hit(qb))start();else if(hit(tb))toTitle();}
-    else if(hit(pb))setPause(true);else tap()}
+cv.addEventListener('click',e=>{
+  if(starting)return;
+  pos(e);
+  if(scene==='start'){
+    const button=(tbtn||[]).find(hit);
+    if(button)button.f();
+  }else if(scene==='result'&&hit(btn)){
+    start();
+  }else if(scene==='play'&&paused&&!resumeAt){
+    if(hit(rb)){gameStatus.hidden=true;setPause(false)}
+    else if(hit(qb))start();
+    else if(hit(tb))toTitle();
+  }
 });
+function playPress(point){
+  pos(point);
+  if(hit(pb))setPause(true);
+  else tap();
+}
+function playMove(point){
+  pos(point);
+  if(scene==='play')trail.push({x:mouse.x,y:mouse.y,t:performance.now()});
+}
+if(window.PointerEvent){
+  cv.addEventListener('pointerdown',e=>{if(scene==='play'&&!paused&&e.button===0)playPress(e)});
+  cv.addEventListener('pointermove',playMove);
+}else{
+  cv.addEventListener('touchstart',e=>{
+    if(scene!=='play'||paused)return;
+    e.preventDefault();
+    for(let i=0;i<e.changedTouches.length&&!paused;i++)playPress(e.changedTouches[i]);
+  },{passive:false});
+  cv.addEventListener('mousedown',e=>{if(scene==='play'&&!paused&&e.button===0)playPress(e)});
+  cv.addEventListener('mousemove',playMove);
+}
 
 /* ---------- draw ---------- */
-function txt(s,x,y,sz,col,al='center',glow){g.font=`bold ${sz}px "Segoe UI",Meiryo,sans-serif`;g.textAlign=al;g.fillStyle=col;g.shadowColor=glow||col;g.shadowBlur=glow===0?0:12;g.fillText(s,x,y);g.shadowBlur=0}
+function txt(s,x,y,sz,col,al='center',glow,maxWidth=W){g.font=`bold ${sz}px "Segoe UI",Meiryo,sans-serif`;g.textAlign=al;g.fillStyle=col;g.shadowColor=glow||col;g.shadowBlur=glow===0?0:12;g.fillText(s,x,y,maxWidth);g.shadowBlur=0}
 function bg(){g.fillStyle='#07070f';g.fillRect(0,0,W,H);
   const gr=g.createLinearGradient(0,0,W,0);gr.addColorStop(0,'rgba(255,61,240,.07)');gr.addColorStop(.5,'rgba(0,0,0,0)');gr.addColorStop(1,'rgba(255,140,0,.07)');g.fillStyle=gr;g.fillRect(0,0,W,H);
   g.strokeStyle='rgba(255,255,255,.03)';g.lineWidth=1;for(let x=0;x<W;x+=40){g.beginPath();g.moveTo(x,0);g.lineTo(x,H);g.stroke()}}
@@ -144,7 +321,7 @@ function play(){
   for(let i=0;i<4;i++){
     const a=Math.max(0,1-(P-lit[i])/250);
     if(a>0){const gr=g.createLinearGradient(0,hy-H*.5,0,hy);gr.addColorStop(0,'rgba(0,240,255,0)');gr.addColorStop(1,`rgba(0,240,255,${.55*a})`);g.fillStyle=gr;g.fillRect(lx+i*ln,hy-H*.5,ln,H*.5)}
-    txt(KEYS[i].toUpperCase(),lx+ln*(i+.5),hy+50,22,'#00f0ff','center',0);
+    txt(KEYS[i].toUpperCase(),lx+ln*(i+.5),hy+Math.min(50,H*.12),22,'#00f0ff','center',0);
   }
   g.strokeStyle='#fff';g.lineWidth=3;g.shadowColor='#00f0ff';g.shadowBlur=16;g.beginPath();g.moveTo(lx,hy);g.lineTo(lx+lw,hy);g.stroke();g.shadowBlur=0;
   // notes
@@ -162,9 +339,10 @@ function play(){
     if(dt<=APP)vis.push(o);
   }
   for(const o of vis){
-    if(o.px!=null&&o.t-targets[o.i-1].t<1.0){
+    const previous=targets[o.i-1];
+    if(previous&&o.t-previous.t<1.0){
       const a=Math.min(1,(APP-(o.t-t))/.4)*.25;
-      g.strokeStyle=`rgba(255,160,255,${a})`;g.lineWidth=2;g.setLineDash([6,8]);g.beginPath();g.moveTo(o.px,o.py);g.lineTo(o.x,o.y);g.stroke();g.setLineDash([])}
+      g.strokeStyle=`rgba(255,160,255,${a})`;g.lineWidth=2;g.setLineDash([6,8]);g.beginPath();g.moveTo(previous.x,previous.y);g.lineTo(o.x,o.y);g.stroke();g.setLineDash([])}
   }
   for(const o of vis){
     const p=1-(o.t-t)/APP,col=`hsl(${320-o.i*9%80+ (o.i%2?0:0)},100%,60%)`,c=`hsl(${(330+o.i*14)%360>40&&(330+o.i*14)%360<300?330:(330+o.i*14)%360},100%,60%)`;
@@ -187,9 +365,22 @@ function play(){
   txt('SCORE '+String(score).padStart(7,'0'),20,46,26,'#fff','left');
   if(combo>1){txt(combo,W/2,H*.3,56,'rgba(255,255,255,.85)','center','#00f0ff');txt('COMBO',W/2,H*.3+26,16,'#00f0ff','center',0)}
   if(t<0)txt(Math.ceil(-t),W/2,H*.5,80,'rgba(255,255,255,.7)');
-  const fl=Math.max(0,1-(P-flashT)/350);if(fl>0){g.fillStyle=`rgba(255,235,150,${fl*.45})`;g.fillRect(-20,-20,W+40,H+40)}g.restore();pb={x:W-60,y:14,w:44,h:36};g.strokeStyle='#8890a8';g.lineWidth=2;g.strokeRect(pb.x,pb.y,pb.w,pb.h);g.fillStyle='#8890a8';g.fillRect(pb.x+14,pb.y+9,5,18);g.fillRect(pb.x+25,pb.y+9,5,18);
+  const fl=Math.max(0,1-(P-flashT)/350);if(fl>0){g.fillStyle=`rgba(255,235,150,${fl*.45})`;g.fillRect(-20,-20,W+40,H+40)}g.restore();pb={x:W-60,y:14,w:44,h:44};g.strokeStyle='#8890a8';g.lineWidth=2;g.strokeRect(pb.x,pb.y,pb.w,pb.h);g.fillStyle='#8890a8';g.fillRect(pb.x+14,pb.y+13,5,18);g.fillRect(pb.x+25,pb.y+13,5,18);
   if(paused&&resumeAt){const rem=resumeAt-performance.now();if(rem<=0){paused=false;resumeAt=0;ac.resume()}else{g.fillStyle='rgba(5,5,15,.55)';g.fillRect(0,0,W,H);txt(Math.ceil(rem/1000),W/2,H*.5,120,'#ffb000');txt('READY...',W/2,H*.62,22,'#8890a8','center',0)}}
-  else if(paused){g.fillStyle='rgba(5,5,15,.78)';g.fillRect(0,0,W,H);txt('PAUSED',W/2,H*.2,48,'#00f0ff');rb={x:W/2-120,y:H*.3,w:240,h:54};qb={x:W/2-120,y:H*.3+66,w:240,h:54};g.lineWidth=3;g.strokeStyle='#ffb000';g.strokeRect(rb.x,rb.y,rb.w,rb.h);g.strokeStyle='#ff3df0';g.strokeRect(qb.x,qb.y,qb.w,qb.h);tb={x:W/2-120,y:H*.3+132,w:240,h:54};g.strokeStyle='#8890a8';g.strokeRect(tb.x,tb.y,tb.w,tb.h);txt('TITLE',W/2,tb.y+36,26,'#8890a8');txt('RESUME',W/2,rb.y+36,26,'#ffb000');txt('RETRY',W/2,qb.y+36,26,'#ff3df0');txt('P / Esc でも再開できるよ',W/2,H*.95,14,'#8890a8','center',0)}
+  else if(paused){
+    const cx=W/2,h=Math.min(54,H*.16),step=h+Math.min(12,H*.025);
+    g.fillStyle='rgba(5,5,15,.78)';g.fillRect(0,0,W,H);
+    txt('PAUSED',cx,H*.2,Math.min(48,H*.15),'#00f0ff');
+    rb={x:cx-120,y:H*.3,w:240,h};
+    qb={...rb,y:rb.y+step};
+    tb={...rb,y:qb.y+step};
+    g.lineWidth=3;
+    for(const [button,label,color] of [[rb,'RESUME','#ffb000'],[qb,'RETRY','#ff3df0'],[tb,'TITLE','#8890a8']]){
+      g.strokeStyle=color;g.strokeRect(button.x,button.y,button.w,button.h);
+      txt(label,cx,button.y+h*.67,Math.min(26,h*.5),color);
+    }
+    if(!TOUCH)txt('P / Esc でも再開できるよ',cx,H*.95,14,'#8890a8','center',0);
+  }
   if(t>END)scene='result';
 }
 function result(){
@@ -200,9 +391,14 @@ function result(){
   txt('SCORE '+score,cx,285*u,28*u,'#fff');
   txt('PERFECT  '+cnt.p,cx,335*u,22*u,'#fff7a8');txt('GREAT  '+cnt.g,cx,368*u,22*u,'#7dffb0');txt('MISS  '+cnt.m,cx,401*u,22*u,'#ff4d6d');
   txt('MAX COMBO  '+maxc+'   ACC '+(acc*100).toFixed(1)+'%',cx,445*u,20*u,'#c8d0e8');
-  btn={x:cx-110,y:480*u,w:220,h:54*u};
+  btn={x:cx-110,y:480*u,w:220,h:Math.max(44,54*u)};
   g.strokeStyle='#ffb000';g.lineWidth=3;g.shadowColor='#ffb000';g.shadowBlur=14;g.strokeRect(btn.x,btn.y,btn.w,btn.h);g.shadowBlur=0;
   txt('RETRY',cx,btn.y+btn.h*.67,26*u,'#ffb000');
 }
+rs();
+if(window.ResizeObserver)new ResizeObserver(rs).observe(cv);
+addEventListener('resize',rs);
 frame();
+fullscreenButton.hidden=isIOSWebApp;
+gameStatus.hidden=true;
 </script></body></html>
