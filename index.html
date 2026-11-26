@@ -89,7 +89,8 @@ document.addEventListener('fullscreenchange',updateFullscreenButton);
 document.addEventListener('webkitfullscreenchange',updateFullscreenButton);
 const BPM=110,B=60/BPM,S8=B/2,BARS=17,KEYS=['a','s','d','f'];
 const END=(BARS-1)*8*S8+1.5;
-let ac,T0,scene='start',starting=false,notes,targets,fx,jt,lit,trail,score,combo,maxc,cnt,mouse={x:0,y:0},btn=null;
+let ac,T0,scene='start',starting=false,notes,targets,fx,jt,lit,trail,score,combo,maxc,cnt,mouse={x:0,y:0};
+let resultRetry=null,resultTitle=null;
 const now=()=>ac?ac.currentTime-T0:0;
 const mf=m=>440*Math.pow(2,(m-69)/12);
 
@@ -158,7 +159,11 @@ function build(){
     if(b>=BARS-1)continue;
     if(KM.has(b*8+6)&&m>=5)continue;
     if(M){if(m%2==0)mk(t)}
-    else{if(m%2==0){if(r()>.1)nk(t)}else if(m==5&&b>=3&&r()<.5)mk(t)}
+    else if(m%2==0){if(r()>.1)nk(t)}
+    else if(m==5&&b>=3&&r()<.5){
+      // The 19th hit lands on beat four of bar six.
+      mk(s===45?46*S8:t);
+    }
   }
 }
 
@@ -266,8 +271,9 @@ cv.addEventListener('click',e=>{
   if(scene==='start'){
     const button=(tbtn||[]).find(hit);
     if(button)button.f();
-  }else if(scene==='result'&&hit(btn)){
-    start();
+  }else if(scene==='result'){
+    if(hit(resultRetry))start();
+    else if(hit(resultTitle))toTitle();
   }else if(scene==='play'&&paused&&!resumeAt){
     if(hit(rb)){gameStatus.hidden=true;setPause(false)}
     else if(hit(qb))start();
@@ -391,9 +397,18 @@ function result(){
   txt('SCORE '+score,cx,285*u,28*u,'#fff');
   txt('PERFECT  '+cnt.p,cx,335*u,22*u,'#fff7a8');txt('GREAT  '+cnt.g,cx,368*u,22*u,'#7dffb0');txt('MISS  '+cnt.m,cx,401*u,22*u,'#ff4d6d');
   txt('MAX COMBO  '+maxc+'   ACC '+(acc*100).toFixed(1)+'%',cx,445*u,20*u,'#c8d0e8');
-  btn={x:cx-110,y:480*u,w:220,h:Math.max(44,54*u)};
-  g.strokeStyle='#ffb000';g.lineWidth=3;g.shadowColor='#ffb000';g.shadowBlur=14;g.strokeRect(btn.x,btn.y,btn.w,btn.h);g.shadowBlur=0;
-  txt('RETRY',cx,btn.y+btn.h*.67,26*u,'#ffb000');
+  const totalNotes=notes.length+targets.length;
+  if(totalNotes>0&&cnt.m===0&&cnt.p+cnt.g===totalNotes){
+    const allPerfect=cnt.p===totalNotes;
+    txt(allPerfect?'ALL PERFECT':'FULL COMBO',cx,495*u,32*u,allPerfect?'#ffd84d':'#00f0ff');
+  }
+  const width=Math.min(160,(W-40)/2),height=Math.max(44,54*u);
+  resultRetry={x:cx-8-width,y:535*u,w:width,h:height};
+  resultTitle={...resultRetry,x:cx+8};
+  for(const [button,label,color] of [[resultRetry,'RETRY','#ffb000'],[resultTitle,'TITLE','#00f0ff']]){
+    g.strokeStyle=color;g.lineWidth=3;g.strokeRect(button.x,button.y,button.w,button.h);
+    txt(label,button.x+width/2,button.y+height*.67,Math.max(16,26*u),color);
+  }
 }
 rs();
 if(window.ResizeObserver)new ResizeObserver(rs).observe(cv);
